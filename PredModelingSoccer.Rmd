@@ -1,0 +1,47 @@
+---
+title: "Soccer Project"
+author: "Ethan Gerak"
+date: "4/10/2021"
+output: html_document
+---
+
+```{r packages, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("RSQLite")
+```
+
+
+
+```{r dbsetup, include=FALSE}
+## connect to db
+con <- dbConnect(drv=RSQLite::SQLite(), dbname="database.sqlite")
+
+## list all tables
+tables <- dbListTables(con)
+
+## exclude sqlite_sequence (contains table information)
+tables <- tables[tables != "sqlite_sequence"]
+
+Country = dbReadTable(con, "Country")
+League = dbReadTable(con, "League")
+Match = dbReadTable(con, "Match")
+Player = dbReadTable(con, "Player")
+Player_Attributes = dbReadTable(con, "Player_Attributes")
+Team = dbReadTable(con, "Team")
+Team_Attributes = dbReadTable(con, "Team_Attributes")
+
+dbDisconnect(con)
+
+```
+
+```{r Tables}
+
+Country
+League
+Match
+Player
+Player_Attributes
+Team
+Team_Attributes
+
+```
