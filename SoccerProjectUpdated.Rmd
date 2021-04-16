@@ -1,0 +1,164 @@
+---
+title: "Soccer Project Updated"
+author: "Ethan Gerak"
+date: "4/16/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+##Load Packages
+library(RSQLite)
+library(dplyr)
+library(xgboost)
+library(Matrix)
+library(knitr)
+library(tidyr)
+```
+
+
+
+```{r SQLdatabase}
+##Connect
+
+con <- dbConnect(drv=RSQLite::SQLite(), dbname="database.sqlite")
+
+##Getting the tables
+
+tables <- dbListTables(con)
+tables <- tables[tables != "sqlite_sequence"]
+
+##Reading in SQL DATA
+
+country = dbReadTable(con, "Country")
+league = dbReadTable(con, "League")
+matches = dbReadTable(con, "Match")
+player = dbReadTable(con, "Player")
+player_Attributes = dbReadTable(con, "Player_Attributes")
+teams = dbReadTable(con, "Team")
+team_attributes = dbReadTable(con, "Team_Attributes")
+
+##Disconnect from Database
+dbDisconnect(con)
+
+
+```
+
+
+
+```{r DataCleaning}
+
+
+
+                                   ###MATCHES DATA
+
+
+
+matchesclean = select(matches, "id", "country_id", "league_id", "season", "date", 
+"match_api_id", "home_team_api_id", "away_team_api_id", "home_team_goal", "away_team_goal", "goal", "shoton", "shotoff", "foulcommit", "card", "cross", "corner", "possession")
+
+head(matchesclean)
+
+## Getting the team names in 
+
+
+matches1 <- left_join(matchesclean, teams, by = c("home_team_api_id" = "team_api_id"))
+
+colnames(matches1)[colnames(matches1) == "id.x"] = "match_id"
+colnames(matches1)[colnames(matches1) == "id.y"] = "home_team_id"
+
+head(matches1)
+
+matches1 <- left_join(matches1, teams, by = c("away_team_api_id" = "team_api_id"))
+
+head(matches1)
+
+colnames(matches1)[colnames(matches1) == "id"] = "away_team_id"
+colnames(matches1)[colnames(matches1) == "team_long_name.y"] = "away_team_name"
+colnames(matches1)[colnames(matches1) == "team_short_name.y"] = "away_team_name_S"
+
+colnames(matches1)[colnames(matches1) == "team_long_name.x"] = "home_team_name"
+colnames(matches1)[colnames(matches1) == "team_short_name.x"] = "home_team_name_S"
+
+head(matches1)
+
+## Finding the match score
+
+  ##Creating the match score column
+
+    matches_wtname = matches1
+    matches_wtname$match_score = NA
+    
+    head(matches_wtname)
+    
+    matches_wresult = transform(matches_wtname, match_score = ifelse(home_team_goal > away_team_goal, "Win", ifelse(home_team_goal == away_team_goal, "Tie", "Loss")))
+    
+    head(matches_wresult)
+
+
+    
+matchesclean1 = select(matches_wresult, "match_id", "country_id", "league_id", "season", "date", "match_api_id", "home_team_api_id", "away_team_api_id", "home_team_goal", "away_team_goal", "match_score", "home_team_name", "away_team_name", "home_team_name_S", "away_team_name_S")
+
+head(matchesclean1)
+
+##Getting country to main dataset 
+
+SData <- left_join(matchesclean1, country, by = c("country_id" = "id"))
+
+SData = select(SData, -country_id)
+colnames(SData)[colnames(SData) == "name"] = "country"
+
+head(SData)
+    
+
+
+                             ###TEAM ATTRIBUTES DATA
+
+head(team_attributes)
+                    
+
+#switch data to season
+
+
+  ##create season column
+
+team_attributes$season = NA
+
+head(team_attributes)
+
+teama = transform(team_attributes, season = 
+                              ifelse(date == '2010-02-22 00:00:00', "2009/2010", 
+                              ifelse(date == '2011-02-22 00:00:00', "2010/2011", 
+                              ifelse(date == '2012-02-22 00:00:00', "2011/2012",
+                              ifelse(date == '2013-09-20 00:00:00', "2013/2014", 
+                              ifelse(date == '2014-09-20 00:00:00', "2014/2015", 
+                              ifelse(date == '2014-09-19 00:00:00', "2014/2015", 
+                              ifelse(date == '2015-09-10 00:00:00', "2015/2016",
+                              ifelse(date == '2015-09-20 00:00:00', "2015/2016", NA
+)))))))))
+
+head(teama)
+select(teama, -date)
+teamaHOME = teama
+teamaAWAY = teama
+colnames(teamaHOME)[colnames(teamaHOME) == "team_api_id"] = "home_team_api_id"
+
+
+Dataset <- left_join(teamaHOME, SData, by = c('home_team_api_id', 'season'))
+
+colnames(teamaAWAY)[colnames(teamaAWAY) == "team_api_id"] = "away_team_api_id"
+
+Dataset <- left_join(teamaAWAY, SData, by = c('away_team_api_id', 'season'))
+
+head(Dataset)
+```
+
+#https://www.kaggle.com/abharg16/predicting-epl-team-season-win-percentages/data
+
+
+
+
+##Changes the id to "match_ID"
+colnames(matches)[colnames(matches)=="id"] <- "match_ID"
+
