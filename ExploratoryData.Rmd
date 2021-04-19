@@ -183,11 +183,7 @@ readr::write_csv(summary_stats, file = "summary_stats.csv")
 Here shows some visualizations of the data, the first showing the top 20 teams in terms of win percentage and the second showing the bottom 20 teams in terms of win percentage. This should give us a good idea of what to expect out of these teams by the end of the final project. If these teams start doing average with our model, it is likely  that the model needs work since these are both the extremes in terms of win percentage. This means that the best team, FC Barcelona, should be predicted to do very well and that the worst team, Cordoba CF, should be predicted to do very poorly. In addition to this we thought it would be interesting to show the correlation between home winning percent and away winning percent which is shown in the third graph. As expected, we see a largely linear line of best fit showing a team that the more a team wins at home, the more a team wins away, but strangely there were some irregularities at low winning percentage caused by sparse observations and outliers there.
 
 
-```{r Data Description}
-Data_Description<-read_excel('Data Description.xlsx')
-print(Data_Description, n=Inf)
-```
-This was a xlsx that we created in excel that had a description of all of the variables that was made from scratch.
+
 ```{r DataCleaning}
 
 
@@ -294,6 +290,11 @@ Dataset <- left_join(teamaAWAY, SData, by = c('away_team_api_id', 'season'))
 head(Dataset)
 ```
 
+```{r Data Description}
+Data_Description<-read_excel('Data Description.xlsx')
+print(Data_Description, n=Inf)
+```
+This was a xlsx that we created in excel that had a description of all of the variables that was made from scratch.
 #Got inspiration from: https://www.kaggle.com/abharg16/predicting-epl-team-season-win-percentages/data
 
 
