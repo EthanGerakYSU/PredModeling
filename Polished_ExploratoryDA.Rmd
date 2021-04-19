@@ -1,0 +1,330 @@
+---
+title: "Cleaned up ExploratoryDA"
+author: "Ethan, Stephen, William"
+date: "4/19/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+##Load Packages
+library(RSQLite)
+library(tidyverse)
+library(xgboost)
+library(Matrix)
+library(knitr)
+library(readxl)
+```
+
+```{r SQLdatabase}
+##Connect
+
+con <- dbConnect(drv=RSQLite::SQLite(), dbname="database.sqlite")
+
+##Getting the tables
+
+tables <- dbListTables(con)
+tables <- tables[tables != "sqlite_sequence"]
+
+##Reading in SQL DATA
+
+country = dbReadTable(con, "Country")
+league = dbReadTable(con, "League")
+matches = dbReadTable(con, "Match")
+player = dbReadTable(con, "Player")
+player_Attributes = dbReadTable(con, "Player_Attributes")
+teams = dbReadTable(con, "Team")
+team_attributes = dbReadTable(con, "Team_Attributes")
+
+##Disconnect from Database
+dbDisconnect(con)
+
+
+```
+
+# Data Source
+
+| This data is an SQL database containing information for more than 25,000 matches and 10,000 players from European professional football. 
+
+| The source of the data originates from: 
+
+* http://football-data.mx-api.enetscores.com/ : scores, lineup, team formation and events 
+
+* http://www.football-data.co.uk/ : betting odds.  
+
+* http://sofifa.com/ : players and teams attributes from EA Sports FIFA games. 
+
+This can be found at https://www.kaggle.com/hugomathien/soccer where these are all compiled into one large dataset.
+
+------------------------------------------------------------
+
+
+\newpage
+
+
+```{r data viz stuff, echo = FALSE}
+### SUBSET RELEVANT INFORMATION FROM MATCHES AND TEAMS
+matchesviz <- matches %>%
+  select(country_id, home_team_api_id, away_team_api_id, home_team_goal, away_team_goal)
+  
+teamsviz <- teams %>%
+  select(team_api_id, team_long_name)
+
+leagueviz <- league %>%
+  select(-id)
+
+### CHANGE TEAM API WITH TEAM NAME
+matchesviz <- left_join(matchesviz, teamsviz, by = c("home_team_api_id" = "team_api_id")) %>%
+  select(-home_team_api_id) %>%
+  rename(home_team = team_long_name) 
+
+matchesviz <- left_join(matchesviz, teamsviz, by = c('away_team_api_id' = "team_api_id")) %>%
+  select (-away_team_api_id) %>%
+  rename(away_team = team_long_name)
+
+### CHANGE COUNTRY_ID TO LEAGUE TYPE
+matchesviz <- left_join(matchesviz, leagueviz) %>%
+  select(-country_id) %>%
+  rename(league = name)
+
+### CREATING WIN PERCENT VARIABLE
+home_win_pct <- matchesviz %>%
+  mutate(match_result = ifelse(home_team_goal > away_team_goal, "W", 
+                               ifelse(home_team_goal == away_team_goal, "T", "L"))) %>%
+  select(home_team, match_result, league) %>%
+  group_by(home_team, league) %>%
+  summarise(win_pct = sum(match_result == "W")/(sum(match_result == "W") + sum(match_result != "W")))
+
+away_win_pct <- matchesviz %>%
+  mutate(match_result = ifelse(away_team_goal > home_team_goal, "W",
+                               ifelse(away_team_goal == home_team_goal, "T", "L"))) %>%
+  select(away_team, match_result, league) %>%
+  group_by(away_team, league) %>%
+  summarise(win_pct = sum(match_result == "W")/(sum(match_result == "W") + sum(match_result != "W")))
+
+matches_final <- left_join(home_win_pct, away_win_pct, by = c("home_team" = "away_team")) %>%
+  rename(team = home_team,
+         league = league.x) %>%
+  group_by(team, league) %>%
+  summarise(win_pct = (win_pct.x + win_pct.y)/2)
+
+                                    ### BEST PERFORMING TEAMS
+
+ matches_final %>%
+  arrange(desc(win_pct)) %>%
+  head(20) %>%
+  ggplot(aes(reorder(team, win_pct), win_pct, fill = league)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title = "Top 20 All-Time Best Teams",
+       subtitle = "Aggregated by League",
+       x = "Team",
+       y = "Historical Win Percentage",
+       fill = "League")
+
+                                    ### WORST PERFORMING TEAMS
+
+matches_final %>%
+  arrange(win_pct) %>%
+  head(20) %>%
+  ggplot(aes(reorder(team, -win_pct), win_pct, fill = league)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title = "Top 20 All-Time Worst Teams",
+       subtitle = "Aggregated by League",
+       x = "Team",
+       y = "Historical Win Percentage",
+       fill = "League")
+
+### CREATING SUMMARY STATS FOR HOME AND AWAY
+home_stats <- matchesviz %>%
+  group_by(home_team) %>%
+  mutate(match_result = ifelse(home_team_goal > away_team_goal, "W",
+                               ifelse(home_team_goal == away_team_goal, "T", "L")),
+         win_pct = sum(match_result == "W")/(sum(match_result == "W") + sum(match_result != "W")),
+         loss_pct = sum(match_result == "L")/(sum(match_result == "L") + sum(match_result != "L")),
+         tie_pct = 1 - (win_pct + loss_pct),
+         goals_per_game = mean(home_team_goal)) %>%
+  select(home_team, league, win_pct, loss_pct, tie_pct, goals_per_game)
+
+away_stats <- matchesviz %>%
+  group_by(away_team) %>%
+  mutate(match_result = ifelse(away_team_goal > home_team_goal, "W",
+                               ifelse(away_team_goal == home_team_goal, "T", "L")),
+         win_pct = sum(match_result == "W")/(sum(match_result == "W") + sum(match_result != "W")),
+         loss_pct = sum(match_result == "L")/(sum(match_result == "L") + sum(match_result != "L")),
+         tie_pct = 1 - (win_pct + loss_pct),
+         goals_per_game = mean(away_team_goal)) %>%
+  select(away_team, league, win_pct, loss_pct, tie_pct, goals_per_game)
+
+                                      ### SUMMARY STATISTICS
+
+summary_stats <- left_join(home_stats, away_stats, by = c("home_team" = "away_team")) %>%
+  rename(team = home_team,
+         league = league.x,
+         goals_per_game = goals_per_game.x) %>%
+  group_by(team, league) %>%
+  mutate(win_pct = (win_pct.x + win_pct.y)/2,
+         loss_pct = (loss_pct.x + loss_pct.y)/2,
+         tie_pct = (tie_pct.x + tie_pct.y)/2) %>%
+  select(team, league, win_pct, loss_pct, tie_pct, goals_per_game) %>%
+  distinct(team, .keep_all = TRUE)
+
+                                        ### CORRELATION OF HOME WINS AND AWAY WINS
+left_join(home_stats, away_stats, by = c("home_team" = "away_team")) %>%
+  rename(team = home_team) %>%
+  group_by(team) %>%
+  summarise(avg_home_win_pct = mean(win_pct.x),
+         avg_away_win_pct = mean(win_pct.y)) %>%
+  ggplot(aes(avg_home_win_pct, avg_away_win_pct)) +
+  geom_point() +
+  geom_smooth(method = "loess") +
+  labs(title = "Correlation Between Home/Away Win Percentages",
+       x = "Historical Home Win Percentage",
+       y = "Historical Away Win Percentage")
+
+readr::write_csv(summary_stats, file = "summary_stats.csv")
+```
+
+# Summary Statstics and Visualizations
+
+| Here shows some visualizations of the data, the first showing the top 20 teams in terms of win percentage and the second showing the bottom 20 teams in terms of win percentage. This should give us a good idea of what to expect out of these teams by the end of the final project. 
+
+| This means that the best team, FC Barcelona, should be predicted to do very well and that the worst team, Cordoba CF, should be predicted to do very poorly. If our model does not reflect this, it will be obvious that we have made an error. 
+
+| In addition to this, we thought it would be interesting to show the correlation between home winning percent and away winning percent. As expected, we see a largely linear line of best fit. This means that a team that wins a lot of home games is likely to also win a lot of away games. However, there were some irregularities at low winning percentage caused by sparse observations and outliers.
+
+------------------------------------------------------------
+
+\newpage
+
+
+```{r DataCleaning, include = FALSE}
+
+
+
+                                   ###MATCHES DATA
+
+
+
+matchesclean = select(matches, "id", "country_id", "league_id", "season", "date", 
+"match_api_id", "home_team_api_id", "away_team_api_id", "home_team_goal", "away_team_goal", "goal", "shoton", "shotoff", "foulcommit", "card", "cross", "corner", "possession")
+
+head(matchesclean)
+
+## Getting the team names in 
+
+
+matches1 <- left_join(matchesclean, teams, by = c("home_team_api_id" = "team_api_id"))
+
+colnames(matches1)[colnames(matches1) == "id.x"] = "match_id"
+colnames(matches1)[colnames(matches1) == "id.y"] = "home_team_id"
+
+head(matches1)
+
+matches1 <- left_join(matches1, teams, by = c("away_team_api_id" = "team_api_id"))
+
+head(matches1)
+
+colnames(matches1)[colnames(matches1) == "id"] = "away_team_id"
+colnames(matches1)[colnames(matches1) == "team_long_name.y"] = "away_team_name"
+colnames(matches1)[colnames(matches1) == "team_short_name.y"] = "away_team_name_S"
+
+colnames(matches1)[colnames(matches1) == "team_long_name.x"] = "home_team_name"
+colnames(matches1)[colnames(matches1) == "team_short_name.x"] = "home_team_name_S"
+
+head(matches1)
+
+## Finding the match score
+
+  ##Creating the match score column
+
+    matches_wtname = matches1
+    matches_wtname$match_score = NA
+    
+    head(matches_wtname)
+    
+    matches_wresult = transform(matches_wtname, match_score = ifelse(home_team_goal > away_team_goal, "Win", ifelse(home_team_goal == away_team_goal, "Tie", "Loss")))
+    
+    head(matches_wresult)
+
+
+    
+matchesclean1 = select(matches_wresult, "match_id", "country_id", "league_id", "season", "date", "match_api_id", "home_team_api_id", "away_team_api_id", "home_team_goal", "away_team_goal", "match_score", "home_team_name", "away_team_name", "home_team_name_S", "away_team_name_S")
+
+head(matchesclean1)
+
+##Getting country to main dataset 
+
+SData <- left_join(matchesclean1, country, by = c("country_id" = "id"))
+
+SData = select(SData, -country_id)
+colnames(SData)[colnames(SData) == "name"] = "country"
+
+head(SData)
+    
+
+
+                             ###TEAM ATTRIBUTES DATA
+
+head(team_attributes)
+                    
+
+#switch data to season
+
+
+  ##create season column
+
+team_attributes$season = NA
+
+head(team_attributes)
+
+teama = transform(team_attributes, season = 
+                              ifelse(date == '2010-02-22 00:00:00', "2009/2010", 
+                              ifelse(date == '2011-02-22 00:00:00', "2010/2011", 
+                              ifelse(date == '2012-02-22 00:00:00', "2011/2012",
+                              ifelse(date == '2013-09-20 00:00:00', "2013/2014", 
+                              ifelse(date == '2014-09-20 00:00:00', "2014/2015", 
+                              ifelse(date == '2014-09-19 00:00:00', "2014/2015", 
+                              ifelse(date == '2015-09-10 00:00:00', "2015/2016",
+                              ifelse(date == '2015-09-20 00:00:00', "2015/2016", NA
+)))))))))
+
+head(teama)
+teamaHOME = teama
+teamaAWAY = teama
+colnames(teamaHOME)[colnames(teamaHOME) == "team_api_id"] = "home_team_api_id"
+
+
+Dataset <- left_join(teamaHOME, SData, by = c('home_team_api_id', 'season'))
+
+colnames(teamaAWAY)[colnames(teamaAWAY) == "team_api_id"] = "away_team_api_id"
+
+Dataset <- left_join(teamaAWAY, SData, by = c('away_team_api_id', 'season'))
+
+head(Dataset)
+```
+
+
+
+# Data Description 
+
+```{r Data Description}
+Data_Description<-read_excel('Data Description.xlsx')
+print(Data_Description, n=Inf)
+```
+
+
+* This was a xlsx that we created in excel that had a description of all of the variables that was made from scratch. 
+
+* For clarity we also attached the xlsx document to our submission
+
+------------------------------------------------------------
+
+In order to help with some of the code for data cleaning, we referenced:
+
+* https://www.kaggle.com/abharg16/predicting-epl-team-season-win-percentages/data
+
+
+
