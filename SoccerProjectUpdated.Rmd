@@ -10,14 +10,19 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ##Load Packages
 library(RSQLite)
-library(dplyr)
+library(tidyverse)
+library(tidymodels)
+library(DataExplorer)
 library(xgboost)
 library(Matrix)
 library(knitr)
-library(tidyr)
+library(vip)
 ```
 
-
+```{r team_rating}
+team_ratings <- read_csv("~/SoccerData/team_ratings.csv")
+team_win_streaks <- read_csv("~/SoccerData/team_win_streaks.csv")
+```
 
 ```{r SQLdatabase}
 ##Connect
@@ -45,7 +50,129 @@ dbDisconnect(con)
 
 ```
 
+```{r data viz stuff}
+### SUBSET RELEVANT INFORMATION FROM MATCHES AND TEAMS
+matchesviz <- matches %>%
+  select(country_id, home_team_api_id, away_team_api_id, home_team_goal, away_team_goal)
+  
+teamsviz <- teams %>%
+  select(team_api_id, team_long_name)
 
+leagueviz <- league %>%
+  select(-id)
+
+### CHANGE TEAM API WITH TEAM NAME
+matchesviz <- left_join(matchesviz, teamsviz, by = c("home_team_api_id" = "team_api_id")) %>%
+  select(-home_team_api_id) %>%
+  rename(home_team = team_long_name) 
+
+matchesviz <- left_join(matchesviz, teamsviz, by = c('away_team_api_id' = "team_api_id")) %>%
+  select (-away_team_api_id) %>%
+  rename(away_team = team_long_name)
+
+### CHANGE COUNTRY_ID TO LEAGUE TYPE
+matchesviz <- left_join(matchesviz, leagueviz) %>%
+  select(-country_id) %>%
+  rename(league = name)
+
+### CREATING WIN PERCENT VARIABLE
+home_win_pct <- matchesviz %>%
+  mutate(match_result = ifelse(home_team_goal > away_team_goal, "W", 
+                               ifelse(home_team_goal == away_team_goal, "T", "L"))) %>%
+  select(home_team, match_result, league) %>%
+  group_by(home_team, league) %>%
+  summarise(win_pct = sum(match_result == "W")/(sum(match_result == "W") + sum(match_result != "W")))
+
+away_win_pct <- matchesviz %>%
+  mutate(match_result = ifelse(away_team_goal > home_team_goal, "W",
+                               ifelse(away_team_goal == home_team_goal, "T", "L"))) %>%
+  select(away_team, match_result, league) %>%
+  group_by(away_team, league) %>%
+  summarise(win_pct = sum(match_result == "W")/(sum(match_result == "W") + sum(match_result != "W")))
+
+matches_final <- left_join(home_win_pct, away_win_pct, by = c("home_team" = "away_team")) %>%
+  rename(team = home_team,
+         league = league.x) %>%
+  group_by(team, league) %>%
+  summarise(win_pct = (win_pct.x + win_pct.y)/2)
+
+                                    ### BEST PERFORMING TEAMS
+
+ matches_final %>%
+  arrange(desc(win_pct)) %>%
+  head(20) %>%
+  ggplot(aes(reorder(team, win_pct), win_pct, fill = league)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title = "Top 20 All-Time Best Teams",
+       subtitle = "Aggregated by League",
+       x = "Team",
+       y = "Historical Win Percentage",
+       fill = "League")
+
+                                    ### WORST PERFORMING TEAMS
+
+matches_final %>%
+  arrange(win_pct) %>%
+  head(20) %>%
+  ggplot(aes(reorder(team, -win_pct), win_pct, fill = league)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title = "Top 20 All-Time Worst Teams",
+       subtitle = "Aggregated by League",
+       x = "Team",
+       y = "Historical Win Percentage",
+       fill = "League")
+
+### CREATING SUMMARY STATS FOR HOME AND AWAY
+home_stats <- matchesviz %>%
+  group_by(home_team) %>%
+  mutate(match_result = ifelse(home_team_goal > away_team_goal, "W",
+                               ifelse(home_team_goal == away_team_goal, "T", "L")),
+         win_pct = sum(match_result == "W")/(sum(match_result == "W") + sum(match_result != "W")),
+         loss_pct = sum(match_result == "L")/(sum(match_result == "L") + sum(match_result != "L")),
+         tie_pct = 1 - (win_pct + loss_pct),
+         goals_per_game = mean(home_team_goal)) %>%
+  select(home_team, league, win_pct, loss_pct, tie_pct, goals_per_game)
+
+away_stats <- matchesviz %>%
+  group_by(away_team) %>%
+  mutate(match_result = ifelse(away_team_goal > home_team_goal, "W",
+                               ifelse(away_team_goal == home_team_goal, "T", "L")),
+         win_pct = sum(match_result == "W")/(sum(match_result == "W") + sum(match_result != "W")),
+         loss_pct = sum(match_result == "L")/(sum(match_result == "L") + sum(match_result != "L")),
+         tie_pct = 1 - (win_pct + loss_pct),
+         goals_per_game = mean(away_team_goal)) %>%
+  select(away_team, league, win_pct, loss_pct, tie_pct, goals_per_game)
+
+                                      ### SUMMARY STATISTICS
+
+summary_stats <- left_join(home_stats, away_stats, by = c("home_team" = "away_team")) %>%
+  rename(team = home_team,
+         league = league.x,
+         goals_per_game = goals_per_game.x) %>%
+  group_by(team, league) %>%
+  mutate(win_pct = (win_pct.x + win_pct.y)/2,
+         loss_pct = (loss_pct.x + loss_pct.y)/2,
+         tie_pct = (tie_pct.x + tie_pct.y)/2) %>%
+  select(team, league, win_pct, loss_pct, tie_pct, goals_per_game) %>%
+  distinct(team, .keep_all = TRUE)
+
+                                        ### CORRELATION OF HOME WINS AND AWAY WINS
+left_join(home_stats, away_stats, by = c("home_team" = "away_team")) %>%
+  rename(team = home_team) %>%
+  group_by(team) %>%
+  summarise(avg_home_win_pct = mean(win_pct.x),
+         avg_away_win_pct = mean(win_pct.y)) %>%
+  ggplot(aes(avg_home_win_pct, avg_away_win_pct)) +
+  geom_point() +
+  geom_smooth(method = "loess") +
+  labs(title = "Correlation Between Home/Away Win Percentages",
+       x = "Historical Home Win Percentage",
+       y = "Historical Away Win Percentage")
+
+readr::write_csv(summary_stats, file = "summary_stats.csv")
+```
 
 ```{r DataCleaning}
 
@@ -161,4 +288,147 @@ head(Dataset)
 
 ##Changes the id to "match_ID"
 colnames(matches)[colnames(matches)=="id"] <- "match_ID"
+
+```{r preprocessing}
+                    ### COMBINE DATASETS ###
+Dataset <- Dataset %>%
+  left_join(team_ratings %>% select(match_api_id, home_team_rating, away_team_rating),
+            by = "match_api_id")
+
+Dataset <- bind_cols(Dataset %>% arrange(match_api_id),
+                    team_win_streaks %>% arrange(match_api_id)) %>%
+  rename(match_api_id = match_api_id...30) %>%
+  select(-match_api_id...42)
+
+Dataset <- Dataset %>%
+  relocate(match_score)
+
+                    ### FEATURE ENGINEERING FOR THINGS THAT WONT WORK IN RECIPE
+## DROP MISSING MATCHES
+Dataset <- Dataset %>%
+  drop_na()
+
+## CONVERT CHARACTERS TO FACTORS
+Dataset <- Dataset %>%
+  mutate_if(is.character, as.factor) %>%
+  mutate(match_score = as.factor(match_score))
+
+## REMOVE UNWANTED FEATURES
+Dataset <- Dataset %>%
+  select(-id, -team_fifa_api_id, -away_team_api_id, -date.x, -season, -match_id, -league_id, -date.y,
+         -match_api_id, -home_team_api_id, -home_team_name, -away_team_name, -home_team_api_id,
+         -home_team_name_S, -away_team_name_S, -country, -home_team_goal, -away_team_goal,
+         -buildUpPlayDribbling)
+
+```
+
+## XGBoost Model
+
+```{r xgboost_model}
+                    ### BUILDING MODEL ###
+## SPLITTING DATA
+set.seed(1)
+soccer_split <- initial_split(Dataset, strata = match_score)
+soccer_train <- training(soccer_split)
+soccer_test <- testing(soccer_split)
+
+## MODEL SPECIFICATIONS
+xgb_model <- boost_tree(
+  trees = 1000, 
+  tree_depth = tune(), min_n = tune(), 
+  loss_reduction = tune(),                     
+  sample_size = tune(), mtry = tune(),         
+  learn_rate = tune(),                         
+) %>% 
+  set_engine("xgboost") %>% 
+  set_mode("classification")
+
+xgb_model
+
+## GRID SPECIFICATIONS
+xgb_grid <- grid_latin_hypercube(
+  tree_depth(),
+  min_n(),
+  loss_reduction(),
+  sample_size = sample_prop(),
+  finalize(mtry(), soccer_train),
+  learn_rate(),
+  size = 30
+)
+
+kable(head(xgb_grid))
+
+## SETTING UP WORKFLOW
+xgb_workflow <- workflow() %>%
+  add_formula(match_score ~ .) %>%
+  add_model(xgb_model)
+
+xgb_workflow
+
+## FOLDS
+set.seed(1)
+vb_folds <- vfold_cv(soccer_train, strata = match_score)
+
+vb_folds
+
+## PRAY FOR MY PC
+doParallel::registerDoParallel()
+
+## TUNE GRID
+set.seed(1)
+xgb_results <- tune_grid(
+  xgb_workflow,
+  resamples = vb_folds,
+  grid = xgb_grid,
+  control = control_grid(save_pred = TRUE)
+)
+
+view(xgb_results$.notes)
+
+xgb_results
+
+xgb_results %>% collect_metrics()
+
+## VISUALIZING ACCURACY METRICS
+xgb_results %>%
+  collect_metrics() %>%
+  filter(.metric == "roc_auc") %>%
+  select(mean, mtry:sample_size) %>%
+  pivot_longer(mtry:sample_size,
+               values_to = "value",
+               names_to = "parameter"
+  ) %>%
+  ggplot(aes(value, mean, color = parameter)) +
+  geom_point(alpha = 0.8, show.legend = FALSE) +
+  facet_wrap(~parameter, scales = "free_x") +
+  labs(x = NULL, y = "AUC")
+
+## BEST PERFORMING SET OF PARAMETERS
+show_best(xgb_results, "accuracy")
+
+## SELECT BEST ACCURACY MEASUREMENT
+best_accuracy <- select_best(xgb_results, "accuracy")
+best_accuracy
+
+## FINALIZE WORKFLOW
+xgb_final <- finalize_workflow(
+  xgb_workflow,
+  best_accuracy
+)
+
+## VIP PLOT
+xgb_final %>%
+  fit(data = soccer_train) %>%
+  pull_workflow_fit() %>%
+  vip(geom = "point")
+
+## FIT TO TRAINING DATA
+final_results <- last_fit(xgb_final, soccer_split)
+collect_metrics(final_results)
+
+#### STUFF TO SAVE
+saveRDS(xgb_results, "./xgb_results.rds")
+saveRDS(xgb_final, "./xgb_final.rds")
+```
+
 

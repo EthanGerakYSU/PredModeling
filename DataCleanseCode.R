@@ -1,33 +1,8 @@
                     # PACKAGES
-library(RSQLite)
 library(tidyverse)
-library(xgboost)
-library(Matrix)
+library(data.table)
 
-                    # READ IN SQLITE TABLES
-##Connect
-
-con <- dbConnect(drv=RSQLite::SQLite(), dbname="database.sqlite")
-
-##Getting the tables
-
-tables <- dbListTables(con)
-tables <- tables[tables != "sqlite_sequence"]
-
-##Reading in SQL DATA
-
-country = dbReadTable(con, "Country")
-league = dbReadTable(con, "League")
-matches = dbReadTable(con, "Match")
-player = dbReadTable(con, "Player")
-player_Attributes = dbReadTable(con, "Player_Attributes")
-teams = dbReadTable(con, "Team")
-team_attributes = dbReadTable(con, "Team_Attributes")
-
-##Disconnect from Database
-dbDisconnect(con)
-
-                    # DATA MANAGEMENT
+                    ### TEAM RATINGS ###
 ## EXTRACT RELEVANT FEATURES FROM MATCHES, TEAMS, AND LEAGUE TABLES
 toolazytotype <- c("home_player_1", "home_player_2", "home_player_3", "home_player_4", "home_player_5", "home_player_6",
                    "home_player_7", "home_player_8", "home_player_9", "home_player_10", "home_player_11",
@@ -280,12 +255,69 @@ test <- test %>%
          -away_player_6_rating, -away_player_7_rating, -away_player_8_rating, -away_player_9_rating, -away_player_10_rating,
          -away_player_11_rating)
 
-                    ## CREATING THE RESPONSE VARIABLE (MATCH_RESULT)
-                    ## MATCH_RESULT IS BASED ON HOME TEAM RESULT
+## SAVE FILE
+readr::write_csv(dataset, file = "team_ratings.csv")
 
-dataset <- dataset %>%
-  group_by(home_team) %>%
-  mutate(match_result = ifelse(home_team_goal > away_team_goal, "W",
-                               ifelse(home_team_goal == away_team_goal, "T", "L")))
+                    ### TEST TO TRY AND MAKE THE ABOVE CODE WAY SMALLER ###
+tmp <- matches %>%
+  select(date, match_api_id, home_player_X1:away_player_11) %>%
+  pivot_longer(home_player_X1:away_player_11, names_to = "player", values_to = "rating") %>%
+  left_join(player_final, by = c("rating" = "player_api_id")) %>%
+  drop_na()
 
-readr::write_csv(dataset, file = "dataset.csv")
+
+
+tmp2 <- tmp %>%
+  group_by(match_api_id, player) %>%
+  mutate(date = as.Date(date),
+         date2 = as.Date(date2),
+         dateDiff = abs(date - date2)) %>%
+  dplyr::slice(which.min(dateDiff))
+
+
+summary(tmp3$player)
+
+tmp %>%
+  select(-rating, -date2) %>%
+  group_by(match_api_id)
+  pivot_wider(names_from = player, values_from = overall_rating) %>%
+  mutate(home_team_rating = mean(c(home_player_1, home_player_2, home_player_3, home_player_4,
+                                   home_player_5, home_player_6, home_player_7, home_player_8,
+                                   home_player_9, home_player_10, home_player_11)),
+         away_team_rating = mean(c(away_player_1, away_player_2, away_player_3, away_player_4,
+                                   away_player_5, away_player_6, away_player_7, away_player_8,
+                                   away_player_9, away_player_10, away_player_11)))
+  
+                    ### WIN STREAK ###
+  
+## HOME WIN STREAK
+home_win_streak <- Dataset %>%
+  select(home_team_name_S, match_score, season, match_api_id) %>%
+  group_by(home_team_name_S, season) %>%
+  mutate(match_score = ifelse(match_score == "Win",
+                              1,
+                              0),
+        home_win_streak = rowid(rleid(match_score)) * match_score) %>%
+  ungroup() %>%
+  select(match_api_id, home_win_streak)
+  
+## AWAY WIN STREAK
+away_win_streak <- Dataset %>%
+  select(away_team_name_S, match_score, season, match_api_id) %>%
+  group_by(away_team_name_S, season) %>%
+  mutate(match_score = ifelse(match_score == "Win",
+                              1,
+                              0),
+          away_win_streak = rowid(rleid(match_score)) * match_score) %>%
+  ungroup() %>%
+  select(match_api_id, away_win_streak)
+
+  
+## COMBINE DATA SETS
+win_streak_data <- bind_cols(home_win_streak %>% arrange(match_api_id),
+                             away_win_streak %>% arrange(match_api_id)) %>%
+  select(-match_api_id...3) %>%
+  rename(match_api_id = match_api_id...1)
+
+## SAVE FILE
+readr::write_csv(win_streak_data, file = "team_win_streaks.csv") 
