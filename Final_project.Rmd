@@ -522,5 +522,6 @@ saveRDS(xgb_results, "./xgb_results.rds")
 saveRDS(xgb_final, "./xgb_final.rds")
 ```
 
-#Final Summary of Project
-In the end, we got a 76.8% accuracy, which for the scope of the project certainly isn't too bad. We believe the model was slightly overfit, but given the amount of time that this project has taken (much more than we expected), we chose to continue with this model. If we had more time, we would work on trying to make this model even better and maybe even do some more fine tuning additional parameters. 
+# Final Summary of Project
+
+In the end, we got a 76.8% accuracy, which for the scope of the project certainly isn't too bad. We believe the model was slightly overfit, but given the amount of time that this project has taken (much more than we expected), we chose to continue with this model. If we had more time, we would work on trying to make this model even better and maybe even do some more fine tuning on additional parameters. 
